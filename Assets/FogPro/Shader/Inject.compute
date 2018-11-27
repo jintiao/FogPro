@@ -1,0 +1,83 @@
+﻿#pragma kernel InjectMain
+
+#define VOLUME_WIDTH 159.0
+#define VOLUME_HEIGHT 89.0
+#define VOLUME_DEPTH 127.0
+
+RWTexture3D<half4> _VolumeInject;
+
+float4 _CameraPos;
+float _NearOverFarClip;
+float4 _FrustumRays[4];
+
+float4 _FogParams;
+float _Density;
+
+float3 _AmbientLight;
+float _Intensity;
+
+
+float3 FrustumRay(float2 uv)
+{
+	float3 ray0 = lerp(_FrustumRays[0].xyz, _FrustumRays[1].xyz, uv.x);
+	float3 ray1 = lerp(_FrustumRays[3].xyz, _FrustumRays[2].xyz, uv.x);
+	return lerp(ray0, ray1, uv.y);
+}
+
+
+float Attenuation(float distSqr)
+{
+	float d = sqrt(distSqr);
+	float kDefaultPointLightRadius = 0.25;
+	return 1.0 / pow(1.0 + d / kDefaultPointLightRadius, 2);
+}
+
+
+struct PointLight
+{
+	float3 pos;
+	float range;
+	float3 color;
+	float padding;
+};
+StructuredBuffer<PointLight> _PointLights;
+float _PointLightsCount;
+float3 InjectPointLights(float3 pos)
+{
+	float3 color = 0;
+	for (int i = 0; i < _PointLightsCount; i++)
+	{
+		float3 l = _PointLights[i].pos - pos;
+		float n = dot(l, l) * _PointLights[i].range;
+		color += _PointLights[i].color * Attenuation(n);
+	}
+	return color;
+}
+
+
+float Density(float3 pos)
+{
+	float fog = _FogParams.x + max(exp(_FogParams.y * (-pos.y + _FogParams.z)) * _FogParams.w, 0.0);
+	return max(fog * _Density, 0.0);
+}
+
+
+[numthreads(16, 2, 16)]
+void InjectMain (uint3 id : SV_DispatchThreadID)
+{
+	float3 color = _AmbientLight;
+
+	float2 uv = float2(id.x / VOLUME_WIDTH, id.y / VOLUME_HEIGHT);
+	float z = id.z / VOLUME_DEPTH;
+	z = _NearOverFarClip + z * (1 - _NearOverFarClip);
+	float3 pos = _CameraPos.xyz + FrustumRay(uv) * z;
+
+	color += InjectPointLights(pos);
+
+	float density = Density(pos);
+
+	float4 output;
+	output.rgb = _Intensity * density * color;
+	output.a = density;
+	_VolumeInject[id] = output;
+}

@@ -1,0 +1,35 @@
+﻿#pragma kernel ScatterMain
+
+#define VOLUME_WIDTH 160.0
+#define VOLUME_HEIGHT 90.0
+#define VOLUME_DEPTH 128.0
+
+Texture3D _VolumeInject;
+RWTexture3D<float4> _VolumeScatter;
+
+float4 ScatterStep(float3 accumulatedLight, float accumulatedTransmittance, float3 sliceLight, float sliceDensity)
+{
+	sliceDensity = max(sliceDensity, 0.000001);
+	float sliceTransmittance = exp(-sliceDensity / VOLUME_DEPTH);
+	float3 sliceLightIntegral = sliceLight * (1.0 - sliceTransmittance) / sliceDensity;
+
+	accumulatedLight += sliceLightIntegral * accumulatedTransmittance;
+	accumulatedTransmittance *= sliceTransmittance;
+	return float4(accumulatedLight, accumulatedTransmittance);
+}
+
+[numthreads(32, 2, 1)]
+void ScatterMain (uint3 id : SV_DispatchThreadID)
+{
+	float4 accum = float4(0, 0, 0, 1);
+	uint3 pos = uint3(id.xy, 0);
+	uint steps = VOLUME_DEPTH;
+
+	for(uint z = 0; z < steps; z++)
+	{
+		pos.z = z;
+		float4 slice = _VolumeInject[pos];
+		accum = ScatterStep(accum.rgb, accum.a, slice.rgb, slice.a);
+		_VolumeScatter[pos] = accum;
+	}
+}
